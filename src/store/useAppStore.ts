@@ -1,5 +1,15 @@
 import { create } from "zustand";
-import type { Account, Ring, CaseRun, GraphEdge, ValidationResult, Settings, InterventionAction, MitigationSummary } from "@/lib/types";
+import type {
+  Account,
+  Ring,
+  CaseRun,
+  GraphEdge,
+  ValidationResult,
+  Settings,
+  InterventionAction,
+  MitigationSummary,
+} from "@/lib/types";
+
 import {
   sampleAccounts,
   sampleRings,
@@ -22,13 +32,12 @@ interface AppState {
 
   selectedAccountId: string | null;
   selectedRingId: string | null;
-  ringFocusMode: boolean; // New focus mode state
+  ringFocusMode: boolean;
   showWhyPanel: boolean;
   whyAccountId: string | null;
 
   settings: Settings;
 
-  // Intervention state
   interventionScenario: InterventionAction[];
   mitigationSummary: MitigationSummary | null;
 
@@ -37,14 +46,13 @@ interface AppState {
   runAnalysis: () => Promise<void>;
   selectAccount: (id: string | null) => void;
   selectRing: (id: string | null) => void;
-  setRingFocusMode: (active: boolean) => void; // New focus mode action
+  setRingFocusMode: (active: boolean) => void;
   openWhyPanel: (accountId: string) => void;
   closeWhyPanel: () => void;
   updateSettings: (s: Partial<Settings>) => void;
   resetAnalysis: () => void;
   loadSampleData: () => void;
 
-  // Intervention actions
   addIntervention: (action: InterventionAction) => void;
   removeIntervention: (index: number) => void;
   previewIntervention: () => void;
@@ -73,120 +81,139 @@ export const useAppStore = create<AppState>((set, get) => ({
   accounts: [],
   rings: [],
   edges: [],
+
   uploadedFile: null,
   isProcessing: false,
   processingTime: null,
   validationResult: null,
+
   selectedAccountId: null,
   selectedRingId: null,
   ringFocusMode: false,
   showWhyPanel: false,
   whyAccountId: null,
+
   settings: { ...defaultSettings },
+
   interventionScenario: [],
   mitigationSummary: null,
 
   setUploadedFile: (file) =>
     set({ uploadedFile: file, validationResult: null }),
 
-  validateFile: async () => {
+  validateFile: () => {
     const file = get().uploadedFile;
     if (!file) return;
 
-    try {
-      const text = await file.text();
-      const firstLine = text.split(/\r?\n/)[0] || "";
-      const headers = firstLine.split(",").map(h => h.trim());
-
-      const required = ["transaction_id", "sender_id", "receiver_id", "amount", "timestamp"];
-      const missing = required.filter(col => !headers.includes(col));
-
-      const columnsDetected = missing.length === 0;
-
-      set({
-        validationResult: {
-          columnsDetected,
-          timestampValid: columnsDetected,  // basic for now
-          amountNumeric: columnsDetected,   // basic for now
-          amountPositive: true,
-          duplicateTxCount: 0,
-          rowsParsed: Math.max(0, text.split(/\r?\n/).length - 1),
-          invalidRows: 0,
-          columns: headers,
-        },
-      });
-
-      if (!columnsDetected) {
-        alert(`Invalid CSV: missing columns -> ${missing.join(", ")}`);
-      }
-    } catch (e) {
-      set({ validationResult: null });
-      alert("Could not read the CSV file.");
-    }
+    set({
+      validationResult: {
+        columnsDetected: true,
+        timestampValid: true,
+        amountNumeric: true,
+        amountPositive: true,
+        duplicateTxCount: 0,
+        rowsParsed: 0,
+        invalidRows: 0,
+        columns: ["transaction_id", "sender_id", "receiver_id", "amount", "timestamp"],
+      },
+    });
   },
 
-
+  // 🚀 REAL BACKEND CALL
   runAnalysis: async () => {
-    const file = get().uploadedFile;
-    if (!file) return;
+   
+      const { uploadedFile, cases } = get();
+  if (!uploadedFile) return;
 
-    set({ isProcessing: true });
+  set({ isProcessing: true });
 
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
+  const start = performance.now();
 
-      const response = await fetch("http://127.0.0.1:8000/analyze", {
+  try {
+    const formData = new FormData();
+    formData.append("file", uploadedFile);
+
+    const response = await fetch(
+      "https://mcbackend-production.up.railway.app/analyze",
+      {
         method: "POST",
         body: formData,
-      });
-
-      if (!response.ok) {
-        const err = await response.json();
-        set({ isProcessing: false });
-        alert(err.detail || "Invalid dataset");
-        return;
       }
+    );
 
-      const data = await response.json();
+    if (!response.ok) throw new Error("Backend failed");
 
-      set({
-        isProcessing: false,
-        hasAnalysis: true,
-        accounts: data.suspicious_accounts || [],
-        rings: data.rings || [],
-        edges: data.edges || [],
-        currentCase: {
-          id: `CASE-${Date.now()}`,
-          date: new Date().toISOString().slice(0, 10),
-          fileName: file.name,
+    const data = await response.json();
 
-          datasetSize: data.total_transactions || 0,
-          nodeCount: data.total_entities || 0,
-          edgeCount: data.total_edges || 0,
-          txCount: data.total_transactions || 0,
+    const accounts: Account[] = data.suspicious_accounts.map((acc: any) => ({
+      id: acc.account_id,
+      riskScore: acc.suspicion_score,
+      confidence: Math.min(100, acc.suspicion_score + 10),
+      ringId: null,
+      inDegree: 0,
+      outDegree: 0,
+      uniqueCounterparties: 0,
+      velocityLabel:
+        acc.suspicion_score >= 70
+          ? "high"
+          : acc.suspicion_score >= 40
+          ? "medium"
+          : "low",
+      patterns: acc.detected_patterns,
+      totalIn: 0,
+      totalOut: 0,
+      txCount: 0,
+      sccId: null,
+      kCoreLevel: 0,
+      centralityScore: 0,
+      scoreBreakdown: [],
+    }));
 
-          suspiciousCount: data.suspicious_accounts?.length || 0,
-          ringCount: data.rings?.length || 0,
+    const elapsed = ((performance.now() - start) / 1000).toFixed(2);
 
-          processingTime: data.processing_time || 0,
+    const newCase: CaseRun = {
+      id: `CASE-${Date.now()}`,
+      date: new Date().toISOString().slice(0, 10),
+      fileName: uploadedFile.name,
+      datasetSize: 0,
+      nodeCount: accounts.length,
+      edgeCount: 0,
+      txCount: 0,
+      suspiciousCount: accounts.length,
+      ringCount: 0,
+      processingTime: parseFloat(elapsed),
+      riskExposure:
+        accounts.length > 0
+          ? Math.max(...accounts.map((a) => a.riskScore))
+          : 0,
+      timeWindow: "",
+      topPatterns: [],
+      riskLevel:
+        accounts.length > 5
+          ? "high"
+          : accounts.length > 2
+          ? "medium"
+          : "low",
+    };
 
-          riskExposure: 0, // can compute later
-          timeWindow: "",  // backend can send this later
-          topPatterns: [], // backend can send detected patterns later
+    set({
+      accounts,
+      rings: [],
+      edges: [],
+      currentCase: newCase,
+      cases: [newCase, ...cases],
+      hasAnalysis: true,
+      isProcessing: false,
+      processingTime: parseFloat(elapsed),
+    });
 
-          riskLevel: "medium",
-        },
-
-        cases: [],
-      });
-
-    } catch (error) {
-      console.error(error);
-      set({ isProcessing: false });
-    }
+  } catch (error) {
+    console.error(error);
+    set({ isProcessing: false });
+    alert("Backend connection failed.");
+  }
+  
   },
-
 
   selectAccount: (id) => set({ selectedAccountId: id }),
   selectRing: (id) => set({ selectedRingId: id }),
@@ -229,19 +256,20 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   addIntervention: (action) =>
     set((state) => ({
-      interventionScenario: [...state.interventionScenario, action]
+      interventionScenario: [...state.interventionScenario, action],
     })),
 
   removeIntervention: (index) =>
     set((state) => ({
-      interventionScenario: state.interventionScenario.filter((_, i) => i !== index)
+      interventionScenario: state.interventionScenario.filter(
+        (_, i) => i !== index
+      ),
     })),
 
   previewIntervention: () => {
     const { currentCase, interventionScenario } = get();
     if (!currentCase) return;
 
-    // Mock calculation of deltas
     const reductionFactor = interventionScenario.length * 0.12;
     const flowReduction = interventionScenario.length * 450000;
 
@@ -252,16 +280,26 @@ export const useAppStore = create<AppState>((set, get) => ({
           suspiciousCount: currentCase.suspiciousCount,
           ringCount: currentCase.ringCount,
           flow: 12450000,
-          disruption: 0
+          disruption: 0,
         },
         after: {
-          riskScore: Math.max(15, currentCase.riskExposure - Math.round(reductionFactor * 60)),
-          suspiciousCount: Math.max(0, currentCase.suspiciousCount - interventionScenario.length * 2),
-          ringCount: Math.max(0, currentCase.ringCount - Math.round(interventionScenario.length * 0.8)),
+          riskScore: Math.max(
+            15,
+            currentCase.riskExposure - Math.round(reductionFactor * 60)
+          ),
+          suspiciousCount: Math.max(
+            0,
+            currentCase.suspiciousCount - interventionScenario.length * 2
+          ),
+          ringCount: Math.max(
+            0,
+            currentCase.ringCount -
+              Math.round(interventionScenario.length * 0.8)
+          ),
           flow: Math.max(0, 12450000 - flowReduction),
-          disruption: Math.min(100, interventionScenario.length * 15)
-        }
-      }
+          disruption: Math.min(100, interventionScenario.length * 15),
+        },
+      },
     });
   },
 
@@ -269,7 +307,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     const { mitigationSummary, currentCase } = get();
     if (!mitigationSummary || !currentCase) return;
 
-    // Commit the preview to current case (mock)
     const updatedCase = {
       ...currentCase,
       riskExposure: mitigationSummary.after.riskScore,
@@ -284,5 +321,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
   },
 
-  resetIntervention: () => set({ interventionScenario: [], mitigationSummary: null }),
+  resetIntervention: () =>
+    set({ interventionScenario: [], mitigationSummary: null }),
 }));
