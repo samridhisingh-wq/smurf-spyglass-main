@@ -134,7 +134,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     formData.append("file", uploadedFile);
 
     const response = await fetch(
-      "https://mcbackend-production.up.railway.app/analyze",
+      "https://mcbackend-production-c0e9.up.railway.app/analyze",
       {
         method: "POST",
         body: formData,
